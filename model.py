@@ -43,16 +43,111 @@ def create_dscnn_model(input_shape, output_dim):
         tf.keras.layers.Dense(output_dim)
     ])
 
+
 def make_esp32_keyword_model(input_shape, num_labels):
-    return tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_shape=input_shape),  # e.g., 49 × 10 × 1
-        tf.keras.layers.Conv2D(8, 3, activation='relu', padding='same'),
-        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),   # Output: 24 × 20 × 8
-        tf.keras.layers.DepthwiseConv2D(3, activation='relu', padding='same'),
-        tf.keras.layers.Conv2D(16, 1, activation='relu'),   # Pointwise conv
-        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),     # Output: 12 × 10 × 16
-        tf.keras.layers.DepthwiseConv2D(3, activation='relu', padding='same'),
-        tf.keras.layers.Conv2D(32, 1, activation='relu'),   # Output: 12 × 10 × 32
-        tf.keras.layers.GlobalAveragePooling2D(),           # Output: 32
-        tf.keras.layers.Dense(num_labels)
-    ])
+    """
+    Attempt to replicate the DS-CNN model from the ESP32 keyword spotting example.
+    - It must be time-invariant, so we use global average pooling.
+    - Fewer parameters to fit on embedded device.
+    """
+    inputs = tf.keras.Input(shape=input_shape)
+
+    x = tf.keras.layers.Conv2D(
+        filters=64,
+        kernel_size=4,
+        strides=2,
+        padding='same',
+        use_bias=False)(inputs)
+    x = tf.keras.layers.ReLU()(x)
+
+    x = tf.keras.layers.DepthwiseConv2D(
+        kernel_size=3,
+        strides=1,
+        padding='same',
+        use_bias=False)(x)
+
+    x = tf.keras.layers.Conv2D(
+        filters=16,
+        kernel_size=3,
+        padding='same',
+        use_bias=False)(x)
+    x = tf.keras.layers.ReLU()(x)
+
+    x = tf.keras.layers.Dropout(0.25)(x)
+
+    x = tf.keras.layers.DepthwiseConv2D(
+        kernel_size=3,
+        strides=1,
+        padding='same',
+        use_bias=False)(x)
+
+    x = tf.keras.layers.Conv2D(
+        filters=16,
+        kernel_size=3,
+        padding='same',
+        use_bias=False)(x)
+    x = tf.keras.layers.ReLU()(x)
+
+    # GAP removes absolute time dimension
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+
+    x = tf.keras.layers.Dropout(0.1)(x)
+
+    x = tf.keras.layers.Flatten()(x)
+    x = tf.keras.layers.Dense(64, activation='relu')(x)
+
+    outputs = tf.keras.layers.Dense(num_labels)(x)
+
+    return tf.keras.Model(inputs, outputs)
+
+
+# def make_esp32_keyword_model(input_shape, num_labels):
+#     """
+#     Attempt to replicate the DS-CNN model from the ESP32 keyword spotting example.
+#     - It must be time-invariant, so we use global average pooling.
+#     - Fewer parameters to fit on embedded device.
+#     """
+#     inputs = tf.keras.Input(shape=input_shape)
+#     x = tf.keras.layers.Conv2D(
+#         filters=64,
+#         kernel_size=(8, 8),
+#         strides=(2, 2),
+#         padding='same',
+#         use_bias=False)(inputs)
+#     x = tf.keras.layers.ReLU()(x)
+
+#     x = tf.keras.layers.DepthwiseConv2D(
+#         kernel_size=3,
+#         strides=1,
+#         padding='same',
+#         use_bias=False)(x)
+#     x = tf.keras.layers.ReLU()(x)
+
+#     x = tf.keras.layers.Conv2D(
+#         filters=16,
+#         kernel_size=1,
+#         padding='same',
+#         use_bias=False)(x)
+#     x = tf.keras.layers.ReLU()(x)
+
+#     x = tf.keras.layers.DepthwiseConv2D(
+#         kernel_size=3,
+#         strides=1,
+#         padding='same',
+#         use_bias=False)(x)
+#     x = tf.keras.layers.ReLU()(x)
+
+#     x = tf.keras.layers.Conv2D(
+#         filters=16,
+#         kernel_size=1,
+#         padding='same',
+#         use_bias=False)(x)
+#     x = tf.keras.layers.ReLU()(x)
+
+#     # GAP removes absolute time dimension
+#     x = tf.keras.layers.GlobalAveragePooling2D()(x)
+
+#     outputs = tf.keras.layers.Dense(num_labels)(x)
+
+    return tf.keras.Model(inputs, outputs)
+

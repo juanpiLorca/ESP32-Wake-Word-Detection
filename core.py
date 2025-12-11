@@ -4,9 +4,71 @@ import pydub
 
 import numpy as np 
 import tensorflow as tf
+from scipy.fftpack import dct
 
 from tensorflow.python.ops import gen_audio_ops as audio_ops
 from tensorflow.python.platform import gfile
+
+def pre_emphasis_filter(signal, pre_emphasis_coeff=0.97):
+  """Applies a pre-emphasis filter on the input signal.
+
+  Args:
+    signal: 1D numpy array of the audio signal.
+    pre_emphasis_coeff: Pre-emphasis coefficient.
+  """
+  emp_signal = np.append(signal[0], signal[1:] - pre_emphasis_coeff * signal[:-1])
+  return emp_signal
+
+def gen_filter_banks(nfilt, nfft, bin):
+    fbank = np.zeros((nfilt, int(np.floor(nfft / 2 + 1))))
+    for m in range(1, nfilt + 1):
+        f_m_minus = int(bin[m - 1])   # left
+        f_m = int(bin[m])             # center
+        f_m_plus = int(bin[m + 1])    # right
+
+        for k in range(f_m_minus, f_m):
+            fbank[m - 1, k] = (k - bin[m - 1]) / (bin[m] - bin[m - 1])
+        for k in range(f_m, f_m_plus):
+            fbank[m - 1, k] = (bin[m + 1] - k) / (bin[m + 1] - bin[m])
+    return fbank
+
+def compute_audio_mfcc_features(audio_data, model_settings):
+  # Params definition 
+  frame_size_length = model_settings['window_size_samples']
+  frame_stride_length = model_settings['window_stride_samples']
+  
+  nfft = 512
+  nfilt = 40
+  num_ceps = 12
+  low_freq_mel = 0
+  high_freq_mel = (2595 * np.log10(1 + (model_settings['sample_rate'] / 2) / 700))  # Convert Hz to Mel
+  mel_points = np.linspace(low_freq_mel, high_freq_mel, nfilt + 2)  # Equally spaced in Mel scale
+  hz_points = (700 * (10**(mel_points / 2595) - 1))  # Convert Mel to Hz
+  bin = np.floor((nfft + 1) * hz_points / model_settings['sample_rate'])
+
+  x_emp = pre_emphasis_filter(audio_data)
+  signal_length = len(x_emp)
+
+  num_frames = int(np.ceil(float(np.abs(signal_length - frame_size_length)) / frame_stride_length))  
+  pad_signal_length = num_frames * frame_stride_length + frame_size_length
+  z = np.zeros(shape=((pad_signal_length - signal_length),))
+  pad_signal = np.append(x_emp, z)
+  indices = np.tile(np.arange(0, frame_size_length), (num_frames, 1)) + np.tile(np.arange(0, num_frames * frame_stride_length, frame_stride_length), (frame_size_length, 1)).T
+  frames = pad_signal[indices.astype(np.int32, copy=False)]
+
+  hamming_window = np.hamming(frame_size_length)
+  frames_windowed = frames * hamming_window
+
+  mag_frames = np.absolute(np.fft.rfft(frames_windowed, n=nfft))
+  pow_frames = ((1.0 / nfft) * (mag_frames ** 2))
+  fbank = gen_filter_banks(nfilt, nfft, bin)
+  filter_banks = np.dot(pow_frames, fbank.T)
+  filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)  # Numerical Stability
+  filter_banks = 20 * np.log10(filter_banks)  # dB
+  mfcc_norm = (filter_banks - (np.mean(filter_banks, axis=0) + 1e-8))# / (np.std(filter_banks, axis=0) + 1e-8)
+  # mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1:(num_ceps+1)]
+  # mfcc_norm = (mfcc - mfcc.mean(axis=0) + 1e-8) 
+  return mfcc_norm, pow_frames
 
 
 class AudioProcessor: 
@@ -56,41 +118,48 @@ class AudioProcessor:
     return self.background_data_
 
   def get_features_from_audio(self, audio_data, model_settings): 
-    spectrogram = audio_ops.audio_spectrogram(
-        audio_data,
-        window_size=model_settings['window_size_samples'],
-        stride=model_settings['window_stride_samples'],
-        magnitude_squared=True
-    )
-    # The number of buckets in each FFT row in the spectrogram will depend on
-    # how many input samples there are in each window. This can be quite
-    # large, with a 160 sample window producing 127 buckets for example. We
-    # don't need this level of detail for classification, so we often want to
-    # shrink them down to produce a smaller result. That's what this section
-    # implements. One method is to use average pooling to merge adjacent
-    # buckets, but a more sophisticated approach is to apply the MFCC
-    # algorithm to shrink the representation.
-    if model_settings['preprocess'] == 'average':
-      self.output_ = tf.nn.pool(
-            input=tf.expand_dims(spectrogram, -1),
-            window_shape=[1, model_settings['average_window_width']],
-            strides=[1, model_settings['average_window_width']],
-            pooling_type='AVG',
-            padding='SAME'
-          )
-    
-    elif model_settings['preprocess'] == 'mfcc':
-      self.output_ = audio_ops.mfcc(
-            spectrogram=spectrogram,
-            sample_rate=model_settings['sample_rate'],
-            dct_coefficient_count=model_settings['fingerprint_width']
-          )
-      # MFCC doesn't accept a 3D tensor, but a 2D one, so we need to add an extra axis
-      self.output_ = tf.expand_dims(self.output_, -1)
-    
-    else: 
-      raise ValueError('Unknown preprocess mode "%s" (should be "mfcc" or'
-                       ' "average")' % (model_settings['preprocess']))
+
+    if model_settings['preprocessing_imp'] == 'tensorflow': 
+      spectrogram = audio_ops.audio_spectrogram(
+          audio_data,
+          window_size=model_settings['window_size_samples'],
+          stride=model_settings['window_stride_samples'],
+          magnitude_squared=True
+      )
+      # The number of buckets in each FFT row in the spectrogram will depend on
+      # how many input samples there are in each window. This can be quite
+      # large, with a 160 sample window producing 127 buckets for example. We
+      # don't need this level of detail for classification, so we often want to
+      # shrink them down to produce a smaller result. That's what this section
+      # implements. One method is to use average pooling to merge adjacent
+      # buckets, but a more sophisticated approach is to apply the MFCC
+      # algorithm to shrink the representation.
+      if model_settings['preprocess'] == 'average':
+        self.output_ = tf.nn.pool(
+              input=tf.expand_dims(spectrogram, -1),
+              window_shape=[1, model_settings['average_window_width']],
+              strides=[1, model_settings['average_window_width']],
+              pooling_type='AVG',
+              padding='SAME'
+            )
+      
+      elif model_settings['preprocess'] == 'mfcc':
+        self.output_ = audio_ops.mfcc(
+              spectrogram=spectrogram,
+              sample_rate=model_settings['sample_rate'],
+              dct_coefficient_count=model_settings['fingerprint_width']
+            )
+        # MFCC doesn't accept a 3D tensor, but a 2D one, so we need to add an extra axis
+        self.output_ = tf.expand_dims(self.output_, -1)
+      
+      else: 
+        raise ValueError('Unknown preprocess mode "%s" (should be "mfcc" or'
+                        ' "average")' % (model_settings['preprocess']))
+    else:
+      self.output_, spectrogram = compute_audio_mfcc_features(
+          audio_data.numpy(), model_settings)
+      self.output_ = tf.convert_to_tensor(self.output_, dtype=tf.float32)
+      self.output_ = tf.expand_dims(self.output_, -1)  # Add channel dimension
     return self.output_, spectrogram
 
 
@@ -106,7 +175,7 @@ def _next_power_of_two(x):
   return 1 if x == 0 else 2**(int(x) - 1).bit_length()
 
 
-def prepare_model_settings(label_count, sample_rate, clip_duration_ms,
+def prepare_model_settings(label_count, preprocess_imp, sample_rate, clip_duration_ms,
                            window_size_ms, window_stride_ms, feature_bin_count,
                            preprocess):
   """Calculates common settings needed for all models.
@@ -149,6 +218,7 @@ def prepare_model_settings(label_count, sample_rate, clip_duration_ms,
                      ' "average", or "micro")' % (preprocess))
   fingerprint_size = fingerprint_width * spectrogram_length
   return {
+      'preprocessing_imp': preprocess_imp,
       'sample_rate': sample_rate,
       'desired_samples': desired_samples,
       'window_size_samples': window_size_samples,
@@ -185,7 +255,7 @@ def get_features_range(model_settings):
                     ' " or average")' % (model_settings['preprocess']))
   return features_min, features_max
 
-def wav_to_features(sample_rate, clip_duration_ms, window_size_ms,
+def wav_to_features(sample_rate, preprocess_imp, clip_duration_ms, window_size_ms,
                     window_stride_ms, feature_bin_count, preprocess,
                     input_audio, spectrogram_output=False):
   """Converts an audio file into its corresponding feature map.
@@ -202,13 +272,15 @@ def wav_to_features(sample_rate, clip_duration_ms, window_size_ms,
     output_c_file: Where to save the generated C source file.
   """
   model_settings = prepare_model_settings(
-      0, sample_rate, clip_duration_ms, window_size_ms, window_stride_ms,
+      0, preprocess_imp, sample_rate, clip_duration_ms, window_size_ms, window_stride_ms,
       feature_bin_count, preprocess)
   audio_processor = AudioProcessor()
   
-  results, spectrogram = audio_processor.get_features_from_audio(input_audio, model_settings)
-  features = results[0]
-  spectrogram = spectrogram[0]
+  features, spectrogram = audio_processor.get_features_from_audio(input_audio, model_settings)
+  if model_settings['preprocessing_imp'] == 'tensorflow':
+    features = features[0]
+    spectrogram = spectrogram[0]
+
   if spectrogram_output:
     return features, spectrogram
   else:
