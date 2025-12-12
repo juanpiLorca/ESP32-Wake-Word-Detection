@@ -1,12 +1,8 @@
 import os
-import math
 import pydub
-
 import numpy as np 
 import tensorflow as tf
-from scipy.fftpack import dct
 
-from tensorflow.python.ops import gen_audio_ops as audio_ops
 from tensorflow.python.platform import gfile
 
 def _next_power_of_two(x):
