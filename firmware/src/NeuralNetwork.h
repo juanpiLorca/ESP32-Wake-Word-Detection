@@ -30,7 +30,7 @@ private:
     TfLiteTensor *output;
 
     // Setting up interpreter and working memory area
-    static constexpr int kArenaSize = 80 * 1024; // 100KB
+    static constexpr int kArenaSize = 70 * 1024; // 100KB
     alignas(16) static uint8_t tensor_arena[kArenaSize];
 
 public:
@@ -46,7 +46,7 @@ public:
 
     size_t usedBytes();
     void runInference();
-    uint8_t *getQuantizedOutputBuffer(); 
+    int8_t *getQuantizedOutputBuffer(); 
 };
 
 #endif

@@ -1,50 +1,80 @@
 #include <Arduino.h>
-
 #undef DEFAULT
-
 #include "NeuralNetwork.h"
 
-#include "up_features_data_quant.h"
-#include "down_features_data_quant.h"
+#include "silence_features_data_quant_int8.h"
+#include "unknown_features_data_quant_int8.h"
+#include "up_features_data_quant_int8.h"
+#include "down_features_data_quant_int8.h"
 
 NeuralNetwork *nn;
 
-void setup()
-{
+// A small struct to organize each test case
+struct TestSample {
+  const char *name;
+  const int8_t *data;
+};
+
+void setup() {
   Serial.begin(115200);
   nn = new NeuralNetwork();
 
   size_t used_bytes = nn->usedBytes();
-  Serial.printf("Neural Network initialized. Used bytes: %d\n", used_bytes);
+  Serial.printf("Neural Network initialized. Used bytes: %d\n\n", used_bytes);
 }
 
-void loop()
-{ 
+void runInference(const TestSample &sample) {
+  Serial.printf("Running inference for '%s'...\n", sample.name);
 
-  const uint8_t* up_features_data = g_up_features_data_quant_data; 
-  const size_t size = nn->getInputTensor()->bytes;
-  TfLiteTensor *input_buff = nn->getInputTensor(); 
-  for (int i = 0; i < size; i++) {
-    input_buff->data.uint8[i] = up_features_data[i];
+  TfLiteTensor *input_tensor = nn->getInputTensor();
+  const size_t size = input_tensor->bytes;
+
+  // Copy input feature data into TFLM tensor
+  for (size_t i = 0; i < size; i++) {
+    input_tensor->data.int8[i] = sample.data[i];
   }
 
+  nn->runInference();
+
+  const int8_t *scores = nn->getQuantizedOutputBuffer();
+
+  Serial.printf(
+      "Scores → Silence: %d, Unknown: %d, Up: %d, Down: %d\n\n",
+      scores[nn->kSilenceIndex],
+      scores[nn->kUnknownIndex],
+      scores[nn->kUpIndex],
+      scores[nn->kDownIndex]
+  );
+}
+
+void loop() {
+
+  TestSample tests[] = {
+      {"silence", g_silence_features_data_quant_int8},
+      {"unknown", g_unknown_features_data_quant_int8},
+      {"up",      g_up_features_data_quant_int8},
+      {"down",    g_down_features_data_quant_int8},
+  };
+
+  const int NUM_TESTS = sizeof(tests) / sizeof(TestSample);
+
+  for (int i = 0; i < NUM_TESTS; i++) {
+    runInference(tests[i]);
+    delay(2000); 
+  }
+
+  Serial.println("=====> Cycle complete. Restarting in 5 seconds <=====");
+  Serial.println();
+  delay(5000);
+}
+
+
+
+void showDims() {
   TfLiteIntArray *input_dims = nn->getInputTensor()->dims;
   Serial.printf("Input size: %d, dims->data[0]: %d, dims->data[1]: %d, dims->data[2]: %d, dims->data[3]: %d\n",
                 input_dims->size, input_dims->data[0], input_dims->data[1], input_dims->data[2], input_dims->data[3]);
-
-  nn->runInference();
-  
   TfLiteIntArray *output_dims = nn->getOutputTensor()->dims;
   Serial.printf("Output size: %d, dims->data[0]: %d, dims->data[1]: %d\n",
                 output_dims->size, output_dims->data[0], output_dims->data[1]);
-
-  uint8_t silence_score = nn->getQuantizedOutputBuffer()[nn->kSilenceIndex];
-  uint8_t unknown_score = nn->getQuantizedOutputBuffer()[nn->kUnknownIndex];
-  uint8_t up_score = nn->getQuantizedOutputBuffer()[nn->kUpIndex];
-  uint8_t down_score = nn->getQuantizedOutputBuffer()[nn->kDownIndex];
-
-  Serial.printf("Scores - Silence: %d, Unknown: %d, Up: %d, Down: %d\n",
-                silence_score, unknown_score, up_score, down_score);
-
-  delay(5000);
 }

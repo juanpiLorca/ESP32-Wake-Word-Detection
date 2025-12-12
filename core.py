@@ -167,8 +167,7 @@ class AudioProcessor:
     Returns:
       Tensor of extracted features and the spectrogram.
     """
-    self.output_ = compute_audio_features(
-        audio_data.numpy(), model_settings)
+    self.output_ = compute_audio_features(audio_data, model_settings)
     self.output_ = tf.convert_to_tensor(self.output_, dtype=tf.float32)
     self.output_ = tf.expand_dims(self.output_, -1)  
     return self.output_
@@ -250,7 +249,7 @@ def wav_to_features_c_file(sample_rate, clip_duration_ms, nfft,
     f.write(' * --output_c_file="%s" \\\n' % output_c_file)
     f.write(' */\n\n')
     if quantize:
-      f.write('const unsigned char g_%s_data[] = {' % variable_base)
+      f.write('const unsigned char g_%s[] = {' % variable_base)
       i = 0
       for value in features.flatten():
         quantized_value = int(value)
@@ -283,14 +282,28 @@ if __name__ == "__main__":
   interpreter.allocate_tensors()
 
   input_wav = 'data/speech_commands/test/up/0c40e715_nohash_0.wav'
-  output_c_file = 'up_features_data_quant.cc'
+  output_c_file = 'up_features_data_quant_int8.cc'
   wav_to_features_c_file(
       sample_rate, clip_duration_ms, nfft, window_size_ms, window_stride_ms,
       nfilt, input_wav, interpreter, output_c_file, quantize=True)
   print(f'Wrote feature data to {output_c_file}')
 
   input_wav = 'data/speech_commands/test/down/0c40e715_nohash_0.wav'
-  output_c_file = 'down_features_data_quant.cc'
+  output_c_file = 'down_features_data_quant_int8.cc'
+  wav_to_features_c_file(
+      sample_rate, clip_duration_ms, nfft, window_size_ms, window_stride_ms,
+      nfilt, input_wav, interpreter, output_c_file, quantize=True)
+  print(f'Wrote feature data to {output_c_file}')
+
+  input_wav = 'data/speech_commands/test/_silence_/2.wav'
+  output_c_file = 'silence_features_data_quant_int8.cc'
+  wav_to_features_c_file(
+      sample_rate, clip_duration_ms, nfft, window_size_ms, window_stride_ms,
+      nfilt, input_wav, interpreter, output_c_file, quantize=True)
+  print(f'Wrote feature data to {output_c_file}')
+
+  input_wav = 'data/speech_commands/test/_unknown_/0b57a6ed_nohash_0.wav'
+  output_c_file = 'unknown_features_data_quant_int8.cc'
   wav_to_features_c_file(
       sample_rate, clip_duration_ms, nfft, window_size_ms, window_stride_ms,
       nfilt, input_wav, interpreter, output_c_file, quantize=True)

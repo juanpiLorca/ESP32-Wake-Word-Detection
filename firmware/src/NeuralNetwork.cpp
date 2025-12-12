@@ -59,7 +59,7 @@ void NeuralNetwork::runInference()
     interpreter->Invoke();
 }
 
-uint8_t *NeuralNetwork::getQuantizedOutputBuffer()
+int8_t *NeuralNetwork::getQuantizedOutputBuffer()
 {
-    return output->data.uint8;
+    return output->data.int8;
 }
